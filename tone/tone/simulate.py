@@ -198,3 +198,78 @@ def simulate(
 
     windows.sort(key=lambda w: w.start)
     return windows, diary, truth
+
+
+# --------------------------------------------------------------------- ECG
+
+def synthetic_ecg(
+    beat_times,
+    *,
+    fs: float = 512.0,
+    duration: float | None = None,
+    noise_uv: float = 25.0,
+    wander_uv: float = 150.0,
+    mains_uv: float = 0.0,
+    mains_hz: float = 60.0,
+    inverted: bool = False,
+    seed: int = 4,
+):
+    """A single-lead ECG with R peaks at exactly `beat_times` (seconds).
+
+    Exists so the R-peak detector can be measured rather than eyeballed: the
+    truth is an input. Waves are Gaussians at conventional offsets and
+    amplitudes, in microvolts, plus baseline wander (breathing and electrode
+    drift), optional mains hum, and white noise.
+
+    `inverted` flips the trace, which is what a watch ECG looks like when the
+    crown hand and the contact hand are swapped. The detector must survive it,
+    because the user will eventually do it.
+    """
+    rng = np.random.default_rng(seed)
+    beats = np.asarray(beat_times, dtype=float)
+    if duration is None:
+        duration = float(beats[-1] + 1.0) if beats.size else 1.0
+    t = np.arange(0.0, duration, 1.0 / fs)
+    signal = np.zeros_like(t)
+
+    #            offset_s, amplitude_uv, sigma_s
+    waves = ((-0.16, 110.0, 0.025),   # P
+             (-0.030, -120.0, 0.008),  # Q
+             (0.0, 1100.0, 0.008),     # R
+             (0.032, -260.0, 0.010),   # S
+             (0.25, 300.0, 0.040))     # T
+    for beat in beats:
+        for offset, amp, sigma in waves:
+            centre = beat + offset
+            lo = max(0.0, centre - 5 * sigma)
+            hi = min(duration, centre + 5 * sigma)
+            if hi <= lo:
+                continue
+            i0, i1 = int(lo * fs), min(t.size, int(hi * fs) + 1)
+            seg = t[i0:i1]
+            signal[i0:i1] += amp * np.exp(-0.5 * ((seg - centre) / sigma) ** 2)
+
+    if wander_uv:
+        signal += wander_uv * np.sin(2 * np.pi * 0.28 * t + 0.7)
+        signal += 0.5 * wander_uv * np.sin(2 * np.pi * 0.11 * t + 2.1)
+    if mains_uv:
+        signal += mains_uv * np.sin(2 * np.pi * mains_hz * t)
+    if noise_uv:
+        signal += rng.normal(0.0, noise_uv, t.size)
+    return (-signal if inverted else signal), t
+
+
+def ecg_beat_times(
+    *, duration: float = 30.0, mean_hr: float = 70.0, rmssd_ms: float = 40.0,
+    start: float = 0.35, seed: int = 4,
+):
+    """Beat times whose successive differences have the requested RMSSD."""
+    rng = np.random.default_rng(seed)
+    mean_rr = 60.0 / mean_hr
+    times = [start]
+    sd = (rmssd_ms / 1000.0) / math.sqrt(2.0)
+    jitter = 0.0
+    while times[-1] < duration - mean_rr:
+        jitter = 0.5 * jitter + rng.normal(0.0, sd)
+        times.append(times[-1] + max(0.3, mean_rr + jitter))
+    return np.array(times[:-1] if times[-1] > duration - 0.3 else times)

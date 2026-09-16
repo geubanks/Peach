@@ -31,6 +31,7 @@ import numpy as np
 from . import calibrate as calib
 from . import cosinor, diary as diary_mod, fixtures as fixtures_mod, power, store
 from .config import DEFAULT, ScoreConfig
+from .metrics import window_metrics
 from .score import daily_scores, score_windows
 
 
@@ -272,6 +273,101 @@ def cmd_validate(args) -> int:
             print("   instrument may be real even if the daily aggregate is not. That is the")
             print("   'different app' outcome in Section 7, and it is still worth building.")
     return {"real": 0, "sample-starved": 0, "rebuild": 2, "underpowered": 3}[daily_result.verdict]
+
+
+# ------------------------------------------------------------------------------ ecg
+def cmd_ecg(args) -> int:
+    """Turn HKElectrocardiogram CSVs into scoreable windows.
+
+    Recordings closer together than --pair-within are treated as one sitting and
+    their intervals concatenated (never bridging the gap between them). The
+    default of 2 minutes is deliberately far below the 5 minutes a Phase 2.1
+    test-retest pair is separated by: merging those would destroy the very
+    pairing the calibration depends on.
+    """
+    from . import ecg as ecg_mod
+
+    target = Path(args.path)
+    files = [target] if target.is_file() else ecg_mod.find_ecg_files(target)
+    if not files:
+        print(f"no ECG CSVs found under {target}.\n"
+              "Health writes them to apple_health_export/electrocardiograms/ inside the\n"
+              "export zip -- they are NOT in export.xml, which is why `tone parse` misses them.",
+              file=sys.stderr)
+        return 1
+
+    cfg = _load_config(args.config)
+    loaded, undated = [], []
+    sample_rate = ecg_mod.DEFAULT_FS
+    for path in sorted(files):
+        rec = ecg_mod.read_ecg_csv(path)
+        sample_rate = rec.fs or sample_rate
+        when = ecg_mod.recording_datetime(rec)
+        (undated if when is None else loaded).append((path, rec, when))
+    loaded.sort(key=lambda item: item[2])
+
+    grouped = ecg_mod.group_sittings([(when, rec) for _, rec, when in loaded],
+                                     args.pair_within)
+    sittings = [[(None, rec, when) for when, rec in group] for group in grouped]
+
+    _rule(f"{len(files)} recording(s) in {len(sittings)} sitting(s)")
+    print(f"{'when':<18}{'recs':>5}{'beats':>7}{'HR':>7}{'RMSSD':>8}  status")
+
+    windows, too_short, merged = [], 0, 0
+    for sitting in sittings:
+        rr = ecg_mod.rr_from_recordings([rec for _, rec, _ in sitting])
+        when = sitting[0][2]
+        metrics = window_metrics(rr, cfg) if rr.size else None
+        label = when.strftime("%Y-%m-%d %H:%M")
+        if len(sitting) > 1:
+            merged += 1
+
+        if metrics is None or not metrics.usable:
+            reason = metrics.reject_reason if metrics else "no beats detected"
+            if reason == "too_few_intervals":
+                too_short += 1
+            hr = f"{metrics.mean_hr:6.1f}" if metrics and math.isfinite(metrics.mean_hr) else "     -"
+            print(f"{label:<18}{len(sitting):5d}{rr.size + len(sitting):7d}{hr:>7}"
+                  f"{'-':>8}  dropped: {reason}")
+            continue
+
+        print(f"{label:<18}{len(sitting):5d}{rr.size + len(sitting):7d}{metrics.mean_hr:7.1f}"
+              f"{metrics.rmssd:8.1f}  ok")
+        windows.append(ecg_mod.ecg_window([rec for _, rec, _ in sitting], when))
+
+    _rule("notes")
+    print(f"Timing resolution at {sample_rate:.0f} Hz is {ecg_mod.timing_resolution_ms(sample_rate):.2f} ms "
+          "per sample before interpolation,")
+    print("against ~17 ms of bpm quantisation on the export path at 60 bpm. This is the")
+    print("most precise RMSSD your hardware can give you.")
+    if merged:
+        print(f"\n{merged} sitting(s) combined more than one recording "
+              f"(within {args.pair_within:g} min of each other).")
+        print("Intervals are concatenated; the gap between recordings is never counted")
+        print("as a beat-to-beat interval.")
+    if too_short:
+        print()
+        print(f"{too_short} sitting(s) were dropped for having too few intervals.")
+        print(f"A 30 s ECG needs a heart rate of {ecg_mod.minimum_heart_rate():.0f} bpm to reach "
+              f"{cfg.min_intervals} intervals -- below that, one recording is not enough.")
+        print("Take two back to back and re-run; they will be combined into one window.")
+        print()
+        print("Note for Phase 2.1: if your resting heart rate is under "
+              f"{ecg_mod.minimum_heart_rate():.0f} bpm, a test-retest")
+        print("PAIR needs FOUR recordings -- two back-to-back for each half of the pair,")
+        print("five minutes apart. Two single ECGs five minutes apart give you two")
+        print("dropped windows and no calibration.")
+    if undated:
+        print(f"\n{len(undated)} recording(s) had no parseable Recording Date and were skipped:")
+        print("an ECG that cannot be placed on the clock cannot be scored against a baseline.")
+
+    if args.out and windows:
+        store.save(windows, args.out)
+        print(f"\nwrote {len(windows)} ECG window(s) -> {args.out}")
+        print("Merge them with your passive windows before scoring; they are marked")
+        print("on_demand, so `tone weights` will pair them and `tone validate` will use")
+        print("them as spot checks.")
+    return 0
 
 
 # ---------------------------------------------------------------------------- power
@@ -523,6 +619,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--spot-window", type=float, default=30.0)
     sp.add_argument("--seed", type=int, default=20260916)
     sp.set_defaults(func=cmd_validate)
+
+    sp = sub.add_parser("ecg", help="HKElectrocardiogram CSVs -> scoreable windows")
+    sp.add_argument("path", help="an unzipped export directory, or one ecg_*.csv")
+    sp.add_argument("--config")
+    sp.add_argument("--out", help="write the resulting windows as JSONL")
+    sp.add_argument("--pair-within", type=float, default=2.0, metavar="MIN",
+                    help="recordings this close are one sitting (default 2 min; keep it "
+                         "well below the 5 min of a test-retest pair)")
+    sp.set_defaults(func=cmd_ecg)
 
     sp = sub.add_parser("power", help="how many diary days Phase 2.2 needs")
     sp.add_argument("--rho", type=float, help="assess a specific observed rho")

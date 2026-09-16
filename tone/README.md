@@ -28,7 +28,7 @@ transcription source for the Swift when the gate opens.
 cd tone
 python3 -m pip install -e .            # numpy only
 python3 -m pip install -e '.[plots,dev]'   # add matplotlib and pytest
-python3 -m pytest                      # 93 tests, ~18 s (skips port/ without a C compiler)
+python3 -m pytest                      # 129 tests, ~18 s (skips port/ without a C compiler)
 ```
 
 Everything also runs without installing: `python3 -m tone <command>`.
@@ -59,6 +59,9 @@ python3 -m tone score data/windows.jsonl
 python3 -m tone plot  data/windows.jsonl --out figures/
 
 # Phase 1.3  start the diary the same day (see docs/DIARY.md)
+
+# Optional but worth it: ECGs are the most precise RR your watch can give
+python3 -m tone ecg ~/Downloads/apple_health_export --out data/ecg_windows.jsonl
 
 # Phase 2.1  ten days of paired Mindfulness sessions, then:
 python3 -m tone weights data/windows.jsonl --out data/config.json
@@ -93,6 +96,7 @@ python3 -m tone fixtures data/windows.jsonl \
 | `simulate.py` | a synthetic body with known parameters |
 | `fixtures.py` | the parity contract for the Swift port |
 | `store.py` | one JSONL format every command reads |
+| `ecg.py` | R-peak detection from `HKElectrocardiogram` voltage — the most precise RR available |
 | `edge_cases.py` | deterministic windows that reach the degenerate branches |
 | `plots.py` | optional figures for Phase 1.1 / 1.2 |
 

@@ -147,6 +147,77 @@ nothing downstream is interpretable until it is fixed.
 
 ---
 
+## 1b. The ECG channel is worth building, and it has a 62 bpm trapdoor
+
+Section 2.4 lists `HKElectrocardiogram` as an honest on-demand source, cites a
+2023 study that used exactly it to quantify stress [13], and then the plan never
+uses it. It is worth using, because it is the only source on this hardware with
+**real beat timing**:
+
+| source | timing |
+|---|---|
+| `export.xml` bpm | integer bpm → RR quantised in ~17 ms steps at 60 bpm |
+| `HKHeartbeatSeriesSample` | true interval timing, whatever the watch resolved |
+| `HKElectrocardiogram` | 512 Hz voltage, R peaks located by you |
+
+`tone/ecg.py` implements the detector: Pan–Tompkins in shape, with two choices
+made for HRV rather than for beat counting. The bandpass is a **symmetric
+linear-phase FIR** applied in `same` mode, so it shifts nothing — a causal IIR
+would move every R peak by its group delay, and a frequency-dependent delay does
+*not* cancel in RR differences the way a constant one does. And the reported
+time comes from re-finding the extremum in the near-raw signal and fitting a
+**parabola** across the three samples at the peak; the integrator is good at
+finding beats and bad at timing them, and for RMSSD the timing is the product.
+
+Measured against synthetic ECGs whose true R times are inputs:
+
+| condition | beats found | timing jitter | RMSSD error |
+|---|---|---|---|
+| clean, 70 bpm | 35/35 | 0.10 ms | −0.08% |
+| inverted lead | 35/35 | 0.10 ms | −0.08% |
+| heavy noise (100 µV) | 35/35 | 0.41 ms | −0.30% |
+| very heavy noise (200 µV) | 35/35 | 0.82 ms | −0.56% |
+| 60 Hz mains hum | 35/35 | 0.10 ms | −0.02% |
+| strong baseline wander | 35/35 | 0.10 ms | −0.08% |
+| 50 bpm / 95 bpm | all | 0.11 ms | ≤0.08% |
+
+Against the export path's +2% to +16%, that is a different instrument. (The
+detector sits about 0.5 ms early on every beat; a *constant* offset cancels
+exactly in successive differences, so only the scatter around it matters.)
+
+**The trapdoor.** An Apple ECG is 30 seconds. At 60 bpm that is ~30 beats and
+hence ~29 intervals — one short of the plan's own `min_intervals` of 30. So
+every single ECG is silently dropped for anyone resting below **62 bpm**:
+
+| resting HR | intervals from one 30 s ECG | |
+|---:|---:|---|
+| 55 | ~26 | dropped |
+| 60 | ~29 | dropped |
+| 62 | ~30 | ok |
+| 70 | ~34 | ok |
+
+Two recordings back to back always clear it, and `tone ecg` concatenates
+recordings within 2 minutes of each other into one sitting — never bridging the
+gap between them, which is not a beat-to-beat interval.
+
+**The consequence that is easy to miss:** if your resting heart rate is under
+62, a Phase 2.1 test–retest *pair* needs **four** ECGs — two back-to-back for
+each half, five minutes apart. Two single ECGs five minutes apart give you two
+dropped windows and no calibration at all. The 2-minute grouping threshold is
+deliberately far below that 5-minute separation, because merging the halves of a
+test–retest pair would destroy the very thing it is measuring.
+
+**Two parsing traps**, both of which fail silently rather than loudly. Apple
+writes the minus sign as **U+2212**, not ASCII hyphen, so `float()` raises on
+every negative sample — and a reader that skips unparseable lines yields a
+half-rectified trace that still looks like an ECG and detects beats badly. And
+in comma-decimal locales the file is semicolon-delimited with numbers like
+`1,5`. Both are handled and both are pinned by tests. ECG CSVs also live in
+`apple_health_export/electrocardiograms/`, *not* in `export.xml`, which is why
+`tone parse` does not see them and `tone ecg` exists.
+
+---
+
 ## 2. The artifact filter has to be two-sided
 
 "Discard any interval that differs from its neighbour by more than 20%" is
