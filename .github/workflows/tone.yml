@@ -1,0 +1,40 @@
+name: tone
+
+on:
+  push:
+    paths: ['tone/**', '.github/workflows/tone.yml']
+  pull_request:
+    paths: ['tone/**', '.github/workflows/tone.yml']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tone
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e '.[dev]' pyflakes
+      - run: python -m pyflakes tone tests
+      - run: python -m pytest -q
+
+      # The parity gate is only worth something if a wrong engine fails it, so
+      # CI checks both that the C port matches and that the mutation suite
+      # still catches all twelve deliberate errors.
+      - name: C port parity
+        run: make -C port check FIXTURE=../watch/fixtures.example.json
+      - name: C port parity (degenerate branches)
+        run: make -C port check FIXTURE=../watch/fixtures.edge.json
+      - name: Parity gate has teeth
+        run: python port/mutations.py watch/fixtures.edge.json
+
+      # A fixture that no longer reproduces its own generator means the
+      # algorithm moved underneath the ports. Regenerate deliberately; never
+      # loosen the tolerance.
+      - name: Fixtures reproduce themselves
+        run: |
+          python -m tone verify watch/fixtures.example.json
+          python -m tone verify watch/fixtures.edge.json

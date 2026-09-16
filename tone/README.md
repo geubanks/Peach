@@ -28,7 +28,7 @@ transcription source for the Swift when the gate opens.
 cd tone
 python3 -m pip install -e .            # numpy only
 python3 -m pip install -e '.[plots,dev]'   # add matplotlib and pytest
-python3 -m pytest                      # 139 tests, ~20 s (skips port/ without a C compiler)
+python3 -m pytest                      # 150 tests, ~20 s (skips port/ without a C compiler)
 ```
 
 Everything also runs without installing: `python3 -m tone <command>`.
@@ -80,6 +80,10 @@ python3 -m tone fixtures data/windows.jsonl \
         --config data/config.json --out watch/fixtures.json
 ```
 
+At any point, `python3 -m tone doctor data/windows.jsonl --diary data/diary.csv`
+reads whatever you have and tells you the one next thing to do — including when
+that thing is "wait, you do not have the days yet".
+
 `data/` is gitignored. Your health data does not belong in a repository.
 
 `tone validate` exits 0 on "real" or "sample-starved", 2 on "rebuild" and 3 on
@@ -97,6 +101,7 @@ python3 -m tone fixtures data/windows.jsonl \
 | `diary.py` | Phase 2.2 Spearman ρ with a cluster bootstrap, and the decision box |
 | `power.py` | how many diary days Phase 2.2 needs before it can answer anything |
 | `sensitivity.py` | does the verdict survive the constants you guessed? λ tuning, honestly |
+| `doctor.py` | what state is the project in, and what is the next thing to do |
 | `parse_export.py` | Apple Health XML/ZIP → windows, streamed |
 | `simulate.py` | a synthetic body with known parameters |
 | `fixtures.py` | the parity contract for the Swift port |

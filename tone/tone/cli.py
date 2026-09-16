@@ -275,6 +275,29 @@ def cmd_validate(args) -> int:
     return {"real": 0, "sample-starved": 0, "rebuild": 2, "underpowered": 3}[daily_result.verdict]
 
 
+# --------------------------------------------------------------------------- doctor
+def cmd_doctor(args) -> int:
+    """Where is this project, and what is the next thing to do?"""
+    from . import doctor as doc
+
+    cfg = _load_config(args.config)
+    windows = store.load(args.windows)
+    entries = doc.parse_diary(args.diary)
+    checks, action = doc.analyse(windows, entries, cfg)
+
+    _rule("status")
+    print(doc.report(checks))
+
+    _rule("next")
+    print(action)
+
+    if any(c.status == doc.FAIL for c in checks):
+        return 1
+    if any(c.status == doc.TODO for c in checks):
+        return 3
+    return 0
+
+
 # ---------------------------------------------------------------------- sensitivity
 def cmd_sensitivity(args) -> int:
     """Does the Phase 2.2 verdict survive the constants you picked by judgement?"""
@@ -676,6 +699,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--spot-window", type=float, default=30.0)
     sp.add_argument("--seed", type=int, default=20260916)
     sp.set_defaults(func=cmd_validate)
+
+    sp = sub.add_parser("doctor", help="what state is the project in, and what is next?")
+    sp.add_argument("windows")
+    sp.add_argument("--diary")
+    sp.add_argument("--config")
+    sp.set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("sensitivity",
                         help="does the verdict survive the constants you guessed?")
