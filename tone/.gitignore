@@ -1,0 +1,16 @@
+# Your own health data never goes in git.
+data/*
+!data/.gitkeep
+figures/
+*.png
+export.xml
+export.zip
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# C port build artifact
+port/tone_parity

@@ -1,0 +1,5 @@
+numpy>=1.24
+# optional, only for `tone report` tables and `tone plot`
+pandas>=2.0
+matplotlib>=3.7
+pytest>=7.4

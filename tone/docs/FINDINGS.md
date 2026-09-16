@@ -1,0 +1,416 @@
+# What implementing the plan turned up
+
+Each of these is also documented where it lives in the code; this file is the
+argument, not the reference. Section numbers are stable — `port/mutations.py`
+cites them by number, so they are not renumbered when something is inserted.
+
+| § | finding | what it changed |
+|---|---|---|
+| **0** | Phase 2.2 at 14 days would say "rebuild" on a real signal | a fourth verdict, and the schedule |
+| 1 | the export's beat data is quantised to whole bpm | a state-dependent bias, and an opt-in correction |
+| 1b | the ECG channel is worth building, and has a 62 bpm trapdoor | a new capability the plan listed but never used |
+| 1c | tuning λ against the diary is circular | cross-validated λ, optimism measured |
+| 1d | the verdict should not depend on constants you guessed | a sensitivity sweep |
+| 2 | the 20% artifact rule has to be two-sided | the filter no longer cascades |
+| 3 | RMSSD must not bridge a dropped interval | a correct answer instead of an inflated one |
+| 4 | `HR = 60000/mean(RR)`, not the mean of rates | a guaranteed parity failure, avoided |
+| 5 | the daily interval uses Student's *t*, not 1.96 | intervals 40% wider at n_d ≈ 5 |
+| — | [eight places the spec was ambiguous](#eight-places-the-spec-did-not-determine-an-answer) | all now written into `watch/CLAUDE.md` |
+
+---
+
+## 0. Phase 2.2, run when the plan schedules it, would probably say "rebuild" on a real signal
+
+This is the one worth acting on.
+
+Phase 1.3 is "done when: 14 consecutive days". Phase 2.2 runs in weeks 3–5 on
+what that produces, and reads an interval spanning zero as **"rebuild"**, which
+routes to *do not write Swift*.
+
+**At n = 14 days, the smallest Spearman ρ whose 95% interval excludes zero is
+0.54.** Phase 2.2's own threshold for "the signal is real" is 0.30, and the same
+paragraph notes that ambulatory HRV–stress correlations in the literature are
+modest. So a perfectly real ρ of 0.30, measured at 14 days, produces an interval
+spanning zero and a verdict of "rebuild" — a false negative built into the
+schedule, on the single test the whole project turns on.
+
+| overlap days | min detectable ρ | at ρ = 0.30 |
+|---:|---:|---|
+| 14 | 0.543 | cannot resolve it |
+| 21 | 0.443 | cannot resolve it |
+| 28 | 0.383 | cannot resolve it |
+| 45 | 0.302 | cannot resolve it (just) |
+| 46 | 0.299 | conclusive |
+| 60 | 0.261 | conclusive |
+| 90 | 0.213 | conclusive |
+
+And the days a given true ρ needs:
+
+| true ρ | days (median) | days (80% power) |
+|---:|---:|---:|
+| 0.20 | 103 | 206 |
+| 0.30 | 46 | 90 |
+| 0.40 | 26 | 50 |
+| 0.50 | 17 | 31 |
+
+"Median" is when the interval clears zero *if your observed ρ lands exactly on
+the truth*. It will not, half the time — 80% power is the number to plan around.
+
+**Method, and why to believe it.** Spearman's ρ, Fisher-transformed, has
+variance ≈ 1.06/(n−3) (Fieller, Hartley & Pearson 1957). Two checks before
+relying on it. Empirical coverage against simulated truth is **94.4–96.0%** for
+ρ ∈ {0, 0.3, 0.5} at n ∈ {14, 30, 60, 120}. Against the cluster bootstrap this
+package actually ships, the intervals agree to within ~0.05 at n = 14 and ~0.02
+by n = 30. Both are pinned in `tests/test_power.py`. The analytic form is used
+so the answer to "how many more days?" is instant and explainable.
+
+One caveat the arithmetic cannot capture: this is power to detect the ρ your
+*pipeline* produces, already attenuated by measurement noise relative to the ρ
+between your true physiology and your true mood. Attenuation makes the required
+sample larger, never smaller. These are floors.
+
+### What changed because of it
+
+**A fourth verdict.** The decision box now distinguishes two situations the plan
+collapses into "rebuild":
+
+- The interval spans zero **and** spans 0.30. Consistent with no effect *and*
+  with exactly the effect you are looking for. Nothing has been learned. This is
+  now **`underpowered`**, and it reports how many more overlapping days would
+  resolve it. It is not evidence against the score; it is not yet evidence about
+  it.
+- The interval spans zero but sits entirely **below** 0.30. You have ruled out
+  an effect as large as the one you set out to find. That is a genuine negative
+  result, and **`rebuild`** is the right call.
+
+`tone validate` exits 0 on real/sample-starved, 2 on rebuild, **3 on
+underpowered**. `tone power` prints the tables above and will assess a specific
+(ρ, n) with `--rho` and `--days`.
+
+**A schedule change.** Run the falsification test at ~46 overlapping days, not
+14 — call it seven weeks of diary once the baseline warm-up and imperfect
+day-to-day overlap are counted. Keep the 14-day milestone as what it actually
+is: the checkpoint that proves the habit stuck.
+
+Nothing about the science changes. What changes is when you are entitled to draw
+a conclusion from it, and what you conclude when the interval is wide.
+
+---
+
+## 1. The export's beat data is quantised, and the bias is state-dependent
+
+`export.xml` does not contain inter-beat intervals. It contains
+`InstantaneousBeatsPerMinute` entries, and `bpm` is an integer. Reconstructing
+RR as `60000 / bpm` therefore lands on a lattice whose spacing is
+
+$$\Delta_{RR} = \left|\frac{d\,RR}{d\,bpm}\right| = \frac{60000}{bpm^2} = \frac{RR^2}{60000}\ \text{ms}$$
+
+— 16.7 ms at 60 bpm, 24 ms at 50 bpm. Treating the rounding error as
+independent and uniform over that bin gives a per-interval variance
+$q = \Delta_{RR}^2/12$, and since RMSSD² estimates $E[(\Delta RR)^2]$ over a
+*difference* of two independently rounded intervals,
+
+$$\mathrm{RMSSD}^2_{\text{observed}} \approx \mathrm{RMSSD}^2_{\text{true}} + 2q$$
+
+Measured against simulated ground truth (200 000 intervals per cell):
+
+| true RMSSD | HR | observed | inflation | after correction |
+|---:|---:|---:|---:|---:|
+| 15 ms | 50 | 17.36 | +15.7% | 14.33 |
+| 25 ms | 50 | 26.77 | +7.1% | 24.91 |
+| 35 ms | 50 | 36.37 | +3.9% | 35.02 |
+| 55 ms | 50 | 55.85 | +1.6% | 54.98 |
+| 15 ms | 60 | 16.49 | +9.9% | 15.02 |
+| 35 ms | 60 | 35.70 | +2.0% | 35.04 |
+| 15 ms | 75 | 15.62 | +4.2% | 15.00 |
+| 35 ms | 75 | 35.38 | +1.1% | 35.11 |
+
+Reproduce with `python3 -m pytest tests/test_metrics.py -k quantization`.
+
+**Why this is worse than a constant bias.** The inflation is largest where RMSSD
+is smallest — your stressed windows — and grows as heart rate falls, which is
+where your sleep windows are. So it does not shift the score, it compresses it.
+At 60 bpm, a true contrast of $\ln(35/15) = 0.847$ reads as $\ln(35.7/16.5) =
+0.772$: about 9% of the dynamic range, gone, before any of the sensor noise the
+validation literature describes.
+
+**What to do about it.** `quantization_correction: true` in the config applies
+$\sqrt{\max(0, \mathrm{RMSSD}^2 - 2q)}$, which recovers the truth to within
+~0.1 ms over most of the table. It breaks down in the top-left cell (15 ms at
+50 bpm, corrected to 14.33): when the quantisation step approaches the RR
+spread, the rounding error stops being independent of the signal and the
+additive model over-corrects. Use the correction, and do not treat export RMSSD
+as a precise instrument at low HR.
+
+**Why it does not sink the project.** The HR channel is untouched — `mean(RR)`
+averages the rounding away, and Step 5 will probably weight HR heavily anyway.
+And `HKHeartbeatSeriesSample`, which the watch app reads, carries actual beat
+timing. The Swift engine sees *better* data than Phase 1 does. Phase 1's job is
+to establish that the pipeline runs and that the signal exists at all; if it
+shows a real correlation through a 9% compression, the on-wrist version can only
+improve on it.
+
+**Check your parse before you trust it.** `tone parse` compares our recomputed
+SDNN against Apple's own per-window SDNN. Apple computed theirs from unrounded
+intervals, so agreement to within a few ms across thousands of windows means the
+reconstruction is sound. (SDNN is the right check precisely because
+quantisation barely touches it — it is dominated by the real spread. RMSSD is
+the metric that suffers.) Wild disagreement means the parse is wrong, and
+nothing downstream is interpretable until it is fixed.
+
+---
+
+## 1b. The ECG channel is worth building, and it has a 62 bpm trapdoor
+
+Section 2.4 lists `HKElectrocardiogram` as an honest on-demand source, cites a
+2023 study that used exactly it to quantify stress [13], and then the plan never
+uses it. It is worth using, because it is the only source on this hardware with
+**real beat timing**:
+
+| source | timing |
+|---|---|
+| `export.xml` bpm | integer bpm → RR quantised in ~17 ms steps at 60 bpm |
+| `HKHeartbeatSeriesSample` | true interval timing, whatever the watch resolved |
+| `HKElectrocardiogram` | 512 Hz voltage, R peaks located by you |
+
+`tone/ecg.py` implements the detector: Pan–Tompkins in shape, with two choices
+made for HRV rather than for beat counting. The bandpass is a **symmetric
+linear-phase FIR** applied in `same` mode, so it shifts nothing — a causal IIR
+would move every R peak by its group delay, and a frequency-dependent delay does
+*not* cancel in RR differences the way a constant one does. And the reported
+time comes from re-finding the extremum in the near-raw signal and fitting a
+**parabola** across the three samples at the peak; the integrator is good at
+finding beats and bad at timing them, and for RMSSD the timing is the product.
+
+Measured against synthetic ECGs whose true R times are inputs:
+
+| condition | beats found | timing jitter | RMSSD error |
+|---|---|---|---|
+| clean, 70 bpm | 35/35 | 0.10 ms | −0.08% |
+| inverted lead | 35/35 | 0.10 ms | −0.08% |
+| heavy noise (100 µV) | 35/35 | 0.41 ms | −0.30% |
+| very heavy noise (200 µV) | 35/35 | 0.82 ms | −0.56% |
+| 60 Hz mains hum | 35/35 | 0.10 ms | −0.02% |
+| strong baseline wander | 35/35 | 0.10 ms | −0.08% |
+| 50 bpm / 95 bpm | all | 0.11 ms | ≤0.08% |
+
+Against the export path's +2% to +16%, that is a different instrument. (The
+detector sits about 0.5 ms early on every beat; a *constant* offset cancels
+exactly in successive differences, so only the scatter around it matters.)
+
+**The trapdoor.** An Apple ECG is 30 seconds. At 60 bpm that is ~30 beats and
+hence ~29 intervals — one short of the plan's own `min_intervals` of 30. So
+every single ECG is silently dropped for anyone resting below **62 bpm**:
+
+| resting HR | intervals from one 30 s ECG | |
+|---:|---:|---|
+| 55 | ~26 | dropped |
+| 60 | ~29 | dropped |
+| 62 | ~30 | ok |
+| 70 | ~34 | ok |
+
+Two recordings back to back always clear it, and `tone ecg` concatenates
+recordings within 2 minutes of each other into one sitting — never bridging the
+gap between them, which is not a beat-to-beat interval.
+
+**The consequence that is easy to miss:** if your resting heart rate is under
+62, a Phase 2.1 test–retest *pair* needs **four** ECGs — two back-to-back for
+each half, five minutes apart. Two single ECGs five minutes apart give you two
+dropped windows and no calibration at all. The 2-minute grouping threshold is
+deliberately far below that 5-minute separation, because merging the halves of a
+test–retest pair would destroy the very thing it is measuring.
+
+**Two parsing traps**, both of which fail silently rather than loudly. Apple
+writes the minus sign as **U+2212**, not ASCII hyphen, so `float()` raises on
+every negative sample — and a reader that skips unparseable lines yields a
+half-rectified trace that still looks like an ECG and detects beats badly. And
+in comma-decimal locales the file is semicolon-delimited with numbers like
+`1,5`. Both are handled and both are pinned by tests. ECG CSVs also live in
+`apple_health_export/electrocardiograms/`, *not* in `export.xml`, which is why
+`tone parse` does not see them and `tone ecg` exists.
+
+---
+
+## 1c. Phase 5 asks you to tune λ against the diary, which is circular
+
+Step 5: "tune λ against your diary." Phase 5: "re-fit λ only if the on-wrist
+correlation is worse than the offline one." Both are reasonable instructions,
+and following them and then quoting the resulting ρ as evidence is circular —
+you chose the parameter that maximises the number you are about to report.
+
+`tone sensitivity` reports it honestly: the in-sample ρ at the best λ *and* a
+leave-one-day-out cross-validated ρ, where each day is scored with a λ chosen
+without that day. The gap between them is the optimism, measured.
+
+**How big is it, actually?** Measured on simulated data with the ratings
+shuffled so there is no true relationship at all — 20 replicates, ~50 days each,
+a 21-point λ grid:
+
+| | mean | worst of 20 |
+|---|---:|---:|
+| in-sample ρ at the best λ | −0.032 | **+0.280** |
+| cross-validated ρ | −0.064 | +0.280 |
+| optimism | **+0.032** | +0.106 |
+
+So the optimism from tuning λ is modest: mean 0.03, worst case 0.11. The reason
+is structural — λ is a single *global* scalar applied to every day alike, so
+leaving one day out barely changes which value wins. One parameter over fifty
+days has very little room to chase noise.
+
+Two things still follow. First, 0.11 is not nothing when the threshold you are
+testing against is 0.30, and the cross-validated number costs nothing to
+compute, so compute it. Second, look at that worst-case in-sample column: on
+data with **no relationship whatsoever**, one replicate in twenty produced
+ρ = +0.28 — almost the "signal is real" threshold — from sampling variability
+alone. That is the larger hazard at these sample sizes, it is what §0 is about,
+and it is why the *interval* matters more than the point estimate.
+
+## 1d. The verdict should not depend on the constants you guessed
+
+Several Section 3 constants are judgement, not measurement: 28 days, 20%, 30
+beats, λ, *t* versus 1.96. `tone sensitivity` sweeps each one and reports
+whether the Phase 2.2 verdict moves. If it does, the conclusion is about the
+knob rather than about you, and the honest response is more days rather than a
+defence of the setting.
+
+One observation from the sweep on simulated data: ρ rises monotonically with the
+baseline length (0.804 at 14 days to 0.892 at 56). A longer baseline is a
+better-estimated baseline, so 28 days is a conservative choice — the limit is
+physiological drift, not statistics. Worth re-checking on your own data, since
+a body that changes over a season will punish a long baseline in a way the
+simulator's stationary rhythm does not.
+
+---
+
+## 2. The artifact filter has to be two-sided
+
+"Discard any interval that differs from its neighbour by more than 20%" is
+unambiguous until you implement it. With a single left neighbour as the
+reference, a rejected interval leaves the reference stale, and the next interval
+is compared against a value that is no longer where the series is. One artifact
+can reject the entire remainder of a window.
+
+The rule implemented in `metrics.filter_rr` keeps an interval when it agrees to
+within 20% with *either* immediate neighbour. This is stateless, symmetric, and
+behaves correctly on both cases that matter:
+
+- an isolated ectopic beat (short interval, compensatory long one) disagrees
+  with both its neighbours and is dropped, along with its compensation;
+- a genuine heart-rate drift agrees with its neighbours all the way down and is
+  kept in full.
+
+`tests/test_metrics.py::test_filter_does_not_cascade_after_a_rejection` is the
+regression test for the version that does not work.
+
+## 3. RMSSD must not bridge a dropped interval
+
+Once an interval is filtered out, the difference between the intervals on either
+side of the gap is not a successive difference — it spans a beat that was
+rejected precisely because it was wrong. Computing it manufactures the artifact
+the filter just removed, and it manufactures a large one.
+
+`metrics.rmssd` sums only over pairs where both intervals survived *and* were
+adjacent in the original series. On a clean window this is identical to the
+textbook formula; on a window with an ectopic beat it is the difference between
+a correct answer and a badly inflated one.
+
+## 4. `HR = 60000 / mean(RR)`, not `mean(60000 / RR)`
+
+Step 2 of the plan defines it the first way. The second is what you get by
+averaging the exported bpm values directly, and it is what you would naturally
+write. By Jensen's inequality the mean of the rates always exceeds the rate of
+the mean, by roughly $\mathrm{CV}^2$ in relative terms: about 0.1% at typical
+resting variability, larger in a variable window.
+
+It is a small difference. It is also a guaranteed 1e-6 parity failure between
+Python and Swift if the two sides choose differently, and it is the kind of bug
+that takes an afternoon to find. `tests/test_metrics.py` pins it.
+
+## 5. The daily interval should use Student's t
+
+The plan says a 95% interval from $\sigma_S/\sqrt{n_d}$, which implies the 1.96
+multiplier. With $n_d \approx 5$ windows a day, the standard deviation is itself
+estimated from four degrees of freedom, and the correct multiplier is
+$t_{0.975,4} = 2.776$ — 42% wider.
+
+Since the interval *is* the product ("Show the interval on the watch... that
+honesty is the product"), understating it by 40% defeats the purpose. The
+default is `interval: "t"`, backed by a 30-entry table that ports to Swift
+verbatim and converges to 1.96 by construction. `interval: "normal"` restores
+the plan's literal formula.
+
+---
+
+## Two smaller choices, recorded so they are not re-litigated
+
+**The trailing baseline excludes the window being scored.** Including it lets
+each sample pull its own baseline towards itself and shrink its own residual.
+The effect is small at $n \approx 140$, but excluding it is also what the
+deployed watch app necessarily does — it scores a new sample against history
+that does not contain it — so the offline and on-wrist numbers agree.
+
+**A day with one usable window still gets an interval.** It borrows the pooled
+within-day standard deviation from every other day and is marked `sd_pooled`.
+The alternative was showing a number with no interval at all, which is the one
+thing Section 8 of the plan says never to do. The borrowing is a real
+assumption — this day is no noisier than your usual day — and it is flagged in
+the output rather than hidden.
+
+---
+
+## One thing the simulator makes visible that the plan does not mention
+
+The cosinor baseline can eat part of the signal it exists to reveal. Stress
+itself has a time-of-day shape: higher in the working afternoon, lower asleep.
+Any component of stress that is reliably circadian is, by construction,
+indistinguishable from the circadian baseline, and Step 3 will absorb it.
+
+In the simulator this is visible directly — the injected circadian amplitude is
+0.30 and the fitted amplitude comes back near 0.41, the difference being the
+circadian part of the injected stress. `tone demo` prints this.
+
+It is still the right trade. The alternative, a flat baseline, leaves a residual
+that swings ±0.5 in ln RMSSD with the clock alone (see
+`figures/baseline_comparison.png` from `tone plot`), which would flag every
+evening as calm and every morning as stressed — exactly the failure Section 2.3
+predicts. But it means the score measures *deviation from your usual day*, not
+total stress, and a day that is stressful on schedule will read closer to
+neutral than it felt. Worth knowing before you interpret a low score on a
+predictably bad Tuesday.
+
+
+---
+
+## Eight places the spec did not determine an answer
+
+Found by writing `port/engine.c` from `watch/CLAUDE.md` alone, without reading
+the Python — the experiment Phase 3.1's "done when" actually asks for. Each is
+marked `SPEC GAP` in `engine.c` and each is now written into the spec.
+
+| # | the question | the answer, now stated |
+|---|---|---|
+| 1 | is "the mean interval" over all intervals or only kept ones? | kept only |
+| 2 | what counts as a "distinct clock hour"? | `floor(hour) mod 24` |
+| 3 | which median convention for an even-sized set? | mean of the two central values |
+| 4 | does the fallback "sample SD" divide by *n* or *n−1*? | *n−1* |
+| 5 | what should the engine do while the weights are TODO? | equal weights, visibly a placeholder |
+| 6 | are the trailing window's endpoints open or closed? | `epoch ≥ t−28d`, strictly earlier by position |
+| 7 | what is "a day"? | the local calendar date of the window's start |
+| 8 | how exactly is the pooled within-day SD pooled? | classical, df = Σ(n_d − 1) |
+
+Seven of the eight change the numbers enough to fail parity. None is exotic;
+every one is a coin-flip a Swift author would also have had to make.
+
+Then the gate itself was tested — `port/mutations.py` breaks the engine twelve
+ways and checks the fixtures notice. The ordinary fixture caught only **9 of
+12**: the flat-baseline guard, the MAD-is-zero fallback and the exact 28-day
+boundary all survived, because a body producing five windows a day never reaches
+those branches. `watch/fixtures.edge.json` exists to close that, and catches
+**12 of 12**.
+
+The mutation suite also found a real bug in `port/runner.c`: the UTC-offset scan
+started one character too late, so whole-second timestamps parsed as naive and
+every epoch came out shifted by a constant — invisible to the baseline window,
+which uses only differences, and visible *only* in the day grouping. It surfaced
+as a mutation caught by one fixture and surviving the other. Nothing else in the
+harness would have found it.
