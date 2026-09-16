@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from . import calibrate as calib
-from . import cosinor, diary as diary_mod, fixtures as fixtures_mod, store
+from . import cosinor, diary as diary_mod, fixtures as fixtures_mod, power, store
 from .config import DEFAULT, ScoreConfig
 from .score import daily_scores, score_windows
 
@@ -256,13 +256,61 @@ def cmd_validate(args) -> int:
     elif daily_result.verdict == "sample-starved":
         print("=> Two scheduled Mindfulness sessions a day, then re-run. This is the")
         print("   only finding that would justify new hardware.")
+    elif daily_result.verdict == "underpowered":
+        print("=> NOT a rebuild, and not a pass. You do not yet have the days to tell")
+        print("   the difference. Keep the diary running and re-run this.")
+        if daily_result.days_to_resolve > 0:
+            print(f"   At the rho you are seeing, about {daily_result.days_to_resolve} more "
+                  "overlapping days should settle it.")
+        print(f"   At n = {daily_result.n}, nothing below rho = "
+              f"{power.min_detectable_rho(daily_result.n):.2f} can clear zero. "
+              "`tone power` has the full table.")
     else:
         print("=> Do not write Swift yet. Work the decision box in Section 2.2 of the plan.")
         if spot.verdict in ("real", "sample-starved"):
             print("   Note the spot checks did better than the daily mean: the moment-to-moment")
             print("   instrument may be real even if the daily aggregate is not. That is the")
             print("   'different app' outcome in Section 7, and it is still worth building.")
-    return 0 if daily_result.verdict != "rebuild" else 2
+    return {"real": 0, "sample-starved": 0, "rebuild": 2, "underpowered": 3}[daily_result.verdict]
+
+
+# ---------------------------------------------------------------------------- power
+def cmd_power(args) -> int:
+    """How many days before Phase 2.2 can answer anything?"""
+    _rule("what a given number of days can detect")
+    print(power.table())
+    print()
+    print("Read the middle column as: with this many overlapping diary-and-score days,")
+    print("any rho smaller than this has a 95% interval that still contains zero.")
+
+    _rule("how many days a given true rho needs")
+    print(power.requirements())
+    print()
+    print("'median' is when the interval around the rho you observe clears zero if your")
+    print("observation lands on the truth. '80% power' is the number to actually plan")
+    print("around, because half the time it will not.")
+
+    _rule("what this means for the plan as written")
+    print(f"Phase 1.3 finishes at 14 days. At 14 days the smallest detectable rho is "
+          f"{power.min_detectable_rho(14):.2f}.")
+    print(f"Phase 2.2's threshold for 'the signal is real' is {power.REAL_THRESHOLD:.2f}, and the plan")
+    print("says ambulatory HRV-stress correlations in the literature are modest.")
+    print()
+    print(f"So a perfectly real rho of {power.REAL_THRESHOLD:.2f}, measured at 14 days, yields an interval")
+    print("spanning zero -- which the plan's decision box reads as 'rebuild', i.e. do not")
+    print("write Swift. That is a false negative built into the schedule.")
+    print()
+    print(f"Run the falsification test at ~{power.days_required(power.REAL_THRESHOLD)} overlapping days, not 14. Keep the 14-day")
+    print("milestone as the habit checkpoint it is. `tone validate` now reports")
+    print("UNDERPOWERED rather than REBUILD when the interval cannot tell the two apart.")
+
+    if args.rho is not None and args.days is not None:
+        _rule(f"your case: rho = {args.rho:g} at {args.days} days")
+        a = power.assess(args.rho, args.days)
+        print(f"95% interval (Fisher-z): {a.lo:+.3f} to {a.hi:+.3f}")
+        print(f"conclusive: {'yes' if a.conclusive else 'no'}")
+        print(a.note)
+    return 0
 
 
 # ------------------------------------------------------------------------ fixtures
@@ -445,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--spot-window", type=float, default=30.0)
     sp.add_argument("--seed", type=int, default=20260916)
     sp.set_defaults(func=cmd_validate)
+
+    sp = sub.add_parser("power", help="how many diary days Phase 2.2 needs")
+    sp.add_argument("--rho", type=float, help="assess a specific observed rho")
+    sp.add_argument("--days", type=int, help="...at this many overlapping days")
+    sp.set_defaults(func=cmd_power)
 
     sp = sub.add_parser("fixtures", help="write parity fixtures for the Swift port")
     sp.add_argument("windows")

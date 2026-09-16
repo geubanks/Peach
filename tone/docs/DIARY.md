@@ -4,9 +4,19 @@ The diary is the only ground truth in this project. Nothing downstream can be
 evaluated without it, and unlike every other phase it cannot be hurried: it
 needs calendar days, not effort. **Start it the same day you export.**
 
-Target: 14 consecutive days with at least 2 entries a day. Phase 2.2 wants more
-than that before its bootstrap interval means much — aim for 30 days of overlap
-with scored windows.
+Target: 14 consecutive days with at least 2 entries a day. **That milestone
+proves the habit stuck; it is not enough to run the falsification test on.**
+
+At 14 days the smallest correlation whose interval excludes zero is ρ = 0.54,
+and Phase 2.2's threshold for "the signal is real" is 0.30. Running the test at
+14 days on a real ρ of 0.3 gives an interval spanning zero, which the plan's
+decision box reads as "rebuild" — a false negative on the one test that matters.
+Resolving ρ = 0.3 needs about **46 overlapping diary-and-score days**, and ~90
+to have an 80% chance of getting there. Call it seven weeks, not two.
+
+Run `tone power` for the full table, and see §0 of `FINDINGS.md`. `tone validate`
+will now say UNDERPOWERED rather than REBUILD when the interval cannot tell the
+two apart, and will tell you how many more days you need.
 
 ## The automation
 

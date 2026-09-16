@@ -22,7 +22,7 @@ the Swift port unable to drift from the science.
 cd tone
 python3 -m pip install -e .            # numpy only
 python3 -m pip install -e '.[plots,dev]'   # add matplotlib and pytest
-python3 -m pytest                      # 68 tests, ~4 s
+python3 -m pytest                      # 86 tests, ~6 s
 ```
 
 Everything also runs without installing: `python3 -m tone <command>`.
@@ -57,7 +57,8 @@ python3 -m tone plot  data/windows.jsonl --out figures/
 # Phase 2.1  ten days of paired Mindfulness sessions, then:
 python3 -m tone weights data/windows.jsonl --out data/config.json
 
-# Phase 2.2  the falsification test
+# Phase 2.2  the falsification test -- but check you have the days for it first
+python3 -m tone power
 python3 -m tone validate data/windows.jsonl \
         --diary data/diary.csv --config data/config.json
 
@@ -68,8 +69,8 @@ python3 -m tone fixtures data/windows.jsonl \
 
 `data/` is gitignored. Your health data does not belong in a repository.
 
-`tone validate` exits 0 on "real" or "sample-starved" and 2 on "rebuild", so it
-can gate a script if you want it to.
+`tone validate` exits 0 on "real" or "sample-starved", 2 on "rebuild" and 3 on
+"underpowered", so it can gate a script if you want it to.
 
 ## What the modules are
 
@@ -81,11 +82,35 @@ can gate a script if you want it to.
 | `score.py` | rolling baseline, robust z, precision weighting, daily interval |
 | `calibrate.py` | Phase 2.1 test–retest → the two measurement-error variances |
 | `diary.py` | Phase 2.2 Spearman ρ with a cluster bootstrap, and the decision box |
+| `power.py` | how many diary days Phase 2.2 needs before it can answer anything |
 | `parse_export.py` | Apple Health XML/ZIP → windows, streamed |
 | `simulate.py` | a synthetic body with known parameters |
 | `fixtures.py` | the parity contract for the Swift port |
 | `store.py` | one JSONL format every command reads |
 | `plots.py` | optional figures for Phase 1.1 / 1.2 |
+
+## One finding that changes the schedule
+
+**Phase 2.2, run when the plan schedules it, would probably say "rebuild" on a
+real signal.** At 14 days — Phase 1.3's "done when" — the smallest ρ whose 95%
+interval excludes zero is **0.54**. Phase 2.2's own threshold for "the signal is
+real" is **0.30**. So a perfectly real ρ of 0.3, measured at 14 days, yields an
+interval spanning zero, which the decision box reads as "do not write Swift".
+
+Resolving ρ = 0.3 takes about **46 overlapping diary-and-score days** (≈90 for
+80% power). Run `tone power` for the tables. Two things changed as a result:
+
+- a fourth verdict, **`underpowered`**, for an interval that spans both zero and
+  0.30 — consistent with no effect *and* with the effect you are looking for, so
+  it settles nothing. Distinct from `rebuild`, which now means the interval
+  excludes 0.30 and you have genuinely ruled the effect out. `tone validate`
+  exits 3 rather than 2, and reports how many more days you need;
+- the 14-day diary milestone is documented as a habit checkpoint, not an
+  analysis gate.
+
+The method is Fisher-z on Spearman's ρ, with empirical coverage of 94.4–96.0%
+against simulated truth and agreement with the shipped cluster bootstrap to
+within ~0.05 at n = 14. Both checks are in `tests/test_power.py`.
 
 ## Five things the implementation settled that the plan left open
 

@@ -21,6 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import power
+
 TIME_KEYS = ("timestamp", "time", "datetime", "date", "when")
 RATING_KEYS = ("rating", "stress", "score", "value", "level")
 
@@ -44,6 +46,12 @@ class Validation:
     n: int
     verdict: str
     note: str
+    days_to_resolve: int = 0
+
+    @property
+    def conclusive(self) -> bool:
+        """False when the data settle nothing either way."""
+        return self.verdict != "underpowered"
 
     def report(self, label: str = "daily") -> str:
         return (
@@ -171,41 +179,73 @@ def bootstrap_rho(
     return rho, (float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5)))
 
 
-def classify(rho: float, ci: tuple[float, float], n: int) -> tuple[str, str]:
-    """The Phase 2.2 decision box.
+def classify(rho: float, ci: tuple[float, float], n: int) -> tuple[str, str, int]:
+    """The Phase 2.2 decision box, with one verdict the plan does not have.
 
-    "rebuild" dominates: an interval spanning zero means you have not shown the
-    score tracks anything, whatever the point estimate. A significantly
-    *negative* rho is also a rebuild, and a louder one -- the score is pointing
-    the wrong way, which usually means a sign error or a diary scale read
-    backwards, not a discovery about your physiology.
+    The plan reads any interval spanning zero as "rebuild", and "rebuild" routes
+    to *do not write Swift*. That conflates two situations that call for
+    opposite responses:
+
+      - the interval spans zero and also spans 0.30, the plan's own threshold
+        for "real". The data are consistent with no effect AND with exactly the
+        effect you are looking for. Nothing has been learned. The response is to
+        collect more days, not to stop.
+      - the interval spans zero but sits entirely below 0.30. You have now ruled
+        out an effect as large as the one you said you cared about. That is a
+        real negative result and "rebuild" is the right call.
+
+    Only the second is a rebuild. The first is `underpowered`, and at the sample
+    sizes the plan schedules it is the *likely* outcome of a real signal: at 14
+    days nothing below rho = 0.54 can clear zero. See tone/power.py.
+
+    A significantly negative rho is its own case, and a loud one -- it usually
+    means a sign error in Step 5 or a diary scale entered backwards, not a
+    discovery about your physiology.
+
+    Returns (verdict, note, days_to_resolve).
     """
     lo, hi = ci
     if not math.isfinite(rho) or not math.isfinite(lo) or not math.isfinite(hi):
-        return "rebuild", "not enough data to estimate rho at all."
-    if lo <= 0.0 <= hi:
-        return "rebuild", (
-            "the interval spans zero. Before suspecting the sensor, check the diary: "
-            "if your ratings barely vary day to day there is nothing for the score to "
-            "track. Do not write Swift until you are out of this box."
-        )
+        return "underpowered", "not enough data to estimate rho at all.", -1
+
     if hi < 0.0:
         return "rebuild", (
             "rho is significantly NEGATIVE. The score is anti-correlated with your "
             "ratings -- look for a sign error in Step 5 or a diary scale entered "
             "backwards before concluding anything physiological."
-        )
+        ), 0
+
+    if lo <= 0.0 <= hi:
+        if hi >= power.REAL_THRESHOLD:
+            need = power.days_required(rho) if rho > 0 else -1
+            more = max(0, need - n) if need > 0 else -1
+            extra = (f" About {more} more overlapping days would resolve it at this rho"
+                     if more > 0 else " Keep collecting")
+            return "underpowered", (
+                f"the interval spans both zero and rho = {power.REAL_THRESHOLD:.2f}, so it is "
+                "consistent with no effect and with the effect you are looking for. This is "
+                "not evidence against the score; it is not yet evidence about it."
+                f"{extra}. Check the diary too: if your ratings barely vary day to day, more "
+                "days will not help."
+            ), more
+        return "rebuild", (
+            f"the interval spans zero and sits entirely below rho = {power.REAL_THRESHOLD:.2f}. "
+            "You have ruled out an effect as large as the one you set out to find -- a real "
+            "negative result, not a sample-size problem. The diary is still the first thing "
+            "to check before concluding it is the sensor."
+        ), 0
+
     if rho >= 0.3:
-        return "real", "the signal is real. Proceed to Phase 3 on your current watch."
+        return "real", "the signal is real. Proceed to Phase 3 on your current watch.", 0
     if rho >= 0.1:
         return "sample-starved", (
             "real but sample-starved. Commit to two scheduled Mindfulness sessions a "
             "day and re-test; this is the one scenario that would justify a Series 12."
-        )
+        ), 0
     return "rebuild", (
         f"rho = {rho:.3f} excludes zero but is too small to act on (n = {n}). "
         "Treat as rebuild."
-    )
+    ), 0
 
 
 def validate_daily(daily, diary: list[DiaryEntry], *, n_boot: int = 10000, seed: int = 20260916) -> Validation:
@@ -214,12 +254,13 @@ def validate_daily(daily, diary: list[DiaryEntry], *, n_boot: int = 10000, seed:
     paired = [(d.mean, ratings[d.day]) for d in daily if d.day in ratings]
     if len(paired) < 3:
         return Validation(float("nan"), (float("nan"), float("nan")), len(paired),
-                          "rebuild", "fewer than 3 days overlap between scores and diary.")
+                          "underpowered",
+                          "fewer than 3 days overlap between scores and diary.", -1)
     xs = np.array([p[0] for p in paired])
     ys = np.array([p[1] for p in paired])
     rho, ci = bootstrap_rho(xs, ys, n_boot=n_boot, seed=seed)
-    verdict, note = classify(rho, ci, len(paired))
-    return Validation(rho, ci, len(paired), verdict, note)
+    verdict, note, more = classify(rho, ci, len(paired))
+    return Validation(rho, ci, len(paired), verdict, note, more)
 
 
 def validate_on_demand(
@@ -239,7 +280,8 @@ def validate_on_demand(
     the one measurement you control the timing of.
     """
     if not diary:
-        return Validation(float("nan"), (float("nan"), float("nan")), 0, "rebuild", "empty diary.")
+        return Validation(float("nan"), (float("nan"), float("nan")), 0,
+                          "underpowered", "empty diary.", -1)
     limit = timedelta(minutes=window_minutes)
     times = [e.when for e in diary]
     paired: list[tuple[float, float]] = []
@@ -257,10 +299,10 @@ def validate_on_demand(
             paired.append((s.s, best.rating))
     if len(paired) < 3:
         return Validation(float("nan"), (float("nan"), float("nan")), len(paired),
-                          "rebuild", f"only {len(paired)} spot checks fell within "
-                                     f"{window_minutes:g} min of a diary entry.")
+                          "underpowered", f"only {len(paired)} spot checks fell within "
+                                          f"{window_minutes:g} min of a diary entry.", -1)
     xs = np.array([p[0] for p in paired])
     ys = np.array([p[1] for p in paired])
     rho, ci = bootstrap_rho(xs, ys, n_boot=n_boot, seed=seed)
-    verdict, note = classify(rho, ci, len(paired))
-    return Validation(rho, ci, len(paired), verdict, note)
+    verdict, note, more = classify(rho, ci, len(paired))
+    return Validation(rho, ci, len(paired), verdict, note, more)

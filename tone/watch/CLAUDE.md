@@ -5,7 +5,8 @@
 > placeholders: the measurement-error variances in §3, which come from Phase 2.1
 > test–retest, and `fixtures.json`, which is generated after those weights
 > exist. **Do not start §5 until both are filled in.** If Phase 2.2 came back
-> "rebuild", this app should not be built at all yet — see §9.
+> "rebuild" or "underpowered", this app should not be built at all yet — see
+> §9 and §10.
 
 This file is the contract for the watch app. The score is already implemented,
 tested and validated in Python at `../tone/`. The Swift here is a **port**, not
@@ -224,7 +225,16 @@ formula here is either measured or argued for in `../docs/FINDINGS.md`. If the
 spec looks wrong, say so and stop — the correct fix is to change the Python,
 regenerate the fixtures, and update this file deliberately, in that order.
 
-## 9. If Phase 2.2 said "rebuild"
+## 9. If Phase 2.2 said "underpowered"
+
+Do not build this app, and do not conclude anything either. `underpowered` means
+the interval spans both zero and 0.30, so the data are consistent with no effect
+*and* with the effect you are looking for. The response is more diary days, not
+a decision. `tone validate` prints how many; `tone power` has the tables. See §0
+of `../docs/FINDINGS.md` — at the 14 days the plan schedules, this is the
+*likely* outcome even when the signal is real.
+
+## 10. If Phase 2.2 said "rebuild"
 
 Do not build this app. The plan's own conclusion (Section 7) is that if five
 passive windows a day cannot resolve daily stress, the project's value is the

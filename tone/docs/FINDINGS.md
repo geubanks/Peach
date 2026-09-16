@@ -1,8 +1,86 @@
 # What implementing the plan turned up
 
-Five decisions that changed a number, and one caveat about the export. Each is
-also documented where it lives in the code; this file is the argument, not the
-reference.
+One finding that changes the schedule, five decisions that changed a number, and
+a caveat about the export. Each is also documented where it lives in the code;
+this file is the argument, not the reference.
+
+---
+
+## 0. Phase 2.2, run when the plan schedules it, would probably say "rebuild" on a real signal
+
+This is the one worth acting on.
+
+Phase 1.3 is "done when: 14 consecutive days". Phase 2.2 runs in weeks 3–5 on
+what that produces, and reads an interval spanning zero as **"rebuild"**, which
+routes to *do not write Swift*.
+
+**At n = 14 days, the smallest Spearman ρ whose 95% interval excludes zero is
+0.54.** Phase 2.2's own threshold for "the signal is real" is 0.30, and the same
+paragraph notes that ambulatory HRV–stress correlations in the literature are
+modest. So a perfectly real ρ of 0.30, measured at 14 days, produces an interval
+spanning zero and a verdict of "rebuild" — a false negative built into the
+schedule, on the single test the whole project turns on.
+
+| overlap days | min detectable ρ | at ρ = 0.30 |
+|---:|---:|---|
+| 14 | 0.543 | cannot resolve it |
+| 21 | 0.443 | cannot resolve it |
+| 28 | 0.383 | cannot resolve it |
+| 45 | 0.302 | cannot resolve it (just) |
+| 46 | 0.299 | conclusive |
+| 60 | 0.261 | conclusive |
+| 90 | 0.213 | conclusive |
+
+And the days a given true ρ needs:
+
+| true ρ | days (median) | days (80% power) |
+|---:|---:|---:|
+| 0.20 | 103 | 206 |
+| 0.30 | 46 | 90 |
+| 0.40 | 26 | 50 |
+| 0.50 | 17 | 31 |
+
+"Median" is when the interval clears zero *if your observed ρ lands exactly on
+the truth*. It will not, half the time — 80% power is the number to plan around.
+
+**Method, and why to believe it.** Spearman's ρ, Fisher-transformed, has
+variance ≈ 1.06/(n−3) (Fieller, Hartley & Pearson 1957). Two checks before
+relying on it. Empirical coverage against simulated truth is **94.4–96.0%** for
+ρ ∈ {0, 0.3, 0.5} at n ∈ {14, 30, 60, 120}. Against the cluster bootstrap this
+package actually ships, the intervals agree to within ~0.05 at n = 14 and ~0.02
+by n = 30. Both are pinned in `tests/test_power.py`. The analytic form is used
+so the answer to "how many more days?" is instant and explainable.
+
+One caveat the arithmetic cannot capture: this is power to detect the ρ your
+*pipeline* produces, already attenuated by measurement noise relative to the ρ
+between your true physiology and your true mood. Attenuation makes the required
+sample larger, never smaller. These are floors.
+
+### What changed because of it
+
+**A fourth verdict.** The decision box now distinguishes two situations the plan
+collapses into "rebuild":
+
+- The interval spans zero **and** spans 0.30. Consistent with no effect *and*
+  with exactly the effect you are looking for. Nothing has been learned. This is
+  now **`underpowered`**, and it reports how many more overlapping days would
+  resolve it. It is not evidence against the score; it is not yet evidence about
+  it.
+- The interval spans zero but sits entirely **below** 0.30. You have ruled out
+  an effect as large as the one you set out to find. That is a genuine negative
+  result, and **`rebuild`** is the right call.
+
+`tone validate` exits 0 on real/sample-starved, 2 on rebuild, **3 on
+underpowered**. `tone power` prints the tables above and will assess a specific
+(ρ, n) with `--rho` and `--days`.
+
+**A schedule change.** Run the falsification test at ~46 overlapping days, not
+14 — call it seven weeks of diary once the baseline warm-up and imperfect
+day-to-day overlap are counted. Keep the 14-day milestone as what it actually
+is: the checkpoint that proves the habit stuck.
+
+Nothing about the science changes. What changes is when you are entitled to draw
+a conclusion from it, and what you conclude when the interval is wide.
 
 ---
 

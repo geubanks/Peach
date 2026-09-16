@@ -46,12 +46,13 @@ def test_bootstrap_ci_brackets_the_point_estimate():
 
 
 def test_classify_decision_box():
+    # The full decision box, including the `underpowered` verdict the plan does
+    # not have, lives in tests/test_power.py.
     assert classify(0.5, (0.2, 0.7), 30)[0] == "real"
-    assert classify(0.2, (-0.05, 0.4), 30)[0] == "rebuild"     # interval spans zero
+    assert classify(0.2, (-0.05, 0.4), 30)[0] == "underpowered"  # spans zero AND 0.30
     assert classify(0.2, (0.11, 0.33), 30)[0] == "sample-starved"
     assert classify(-0.5, (-0.7, -0.3), 30)[0] == "rebuild"
     assert "NEGATIVE" in classify(-0.5, (-0.7, -0.3), 30)[1]
-    assert classify(float("nan"), (float("nan"), float("nan")), 0)[0] == "rebuild"
 
 
 def test_read_diary_handles_headers_and_bad_rows(tmp_path):
@@ -133,4 +134,6 @@ def test_validate_daily_needs_overlapping_days():
     cfg = ScoreConfig()
     daily = daily_scores(score_windows(windows, cfg), cfg)
     far_away = [DiaryEntry(datetime(2030, 1, 1, 9, tzinfo=TZ), 5.0)]
-    assert validate_daily(daily, far_away).verdict == "rebuild"
+    result = validate_daily(daily, far_away)
+    # No overlap is a sample-size problem, not evidence against the score.
+    assert result.verdict == "underpowered" and not result.conclusive
