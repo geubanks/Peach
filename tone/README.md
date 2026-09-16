@@ -28,7 +28,7 @@ transcription source for the Swift when the gate opens.
 cd tone
 python3 -m pip install -e .            # numpy only
 python3 -m pip install -e '.[plots,dev]'   # add matplotlib and pytest
-python3 -m pytest                      # 129 tests, ~18 s (skips port/ without a C compiler)
+python3 -m pytest                      # 139 tests, ~20 s (skips port/ without a C compiler)
 ```
 
 Everything also runs without installing: `python3 -m tone <command>`.
@@ -71,6 +71,10 @@ python3 -m tone power
 python3 -m tone validate data/windows.jsonl \
         --diary data/diary.csv --config data/config.json
 
+# Phase 5    is the answer an artifact of the constants you chose?
+python3 -m tone sensitivity data/windows.jsonl \
+        --diary data/diary.csv --config data/config.json
+
 # Phase 3.1  only once 2.2 says "real"
 python3 -m tone fixtures data/windows.jsonl \
         --config data/config.json --out watch/fixtures.json
@@ -92,6 +96,7 @@ python3 -m tone fixtures data/windows.jsonl \
 | `calibrate.py` | Phase 2.1 test–retest → the two measurement-error variances |
 | `diary.py` | Phase 2.2 Spearman ρ with a cluster bootstrap, and the decision box |
 | `power.py` | how many diary days Phase 2.2 needs before it can answer anything |
+| `sensitivity.py` | does the verdict survive the constants you guessed? λ tuning, honestly |
 | `parse_export.py` | Apple Health XML/ZIP → windows, streamed |
 | `simulate.py` | a synthetic body with known parameters |
 | `fixtures.py` | the parity contract for the Swift port |

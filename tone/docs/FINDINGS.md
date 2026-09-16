@@ -218,6 +218,57 @@ in comma-decimal locales the file is semicolon-delimited with numbers like
 
 ---
 
+## 1c. Phase 5 asks you to tune λ against the diary, which is circular
+
+Step 5: "tune λ against your diary." Phase 5: "re-fit λ only if the on-wrist
+correlation is worse than the offline one." Both are reasonable instructions,
+and following them and then quoting the resulting ρ as evidence is circular —
+you chose the parameter that maximises the number you are about to report.
+
+`tone sensitivity` reports it honestly: the in-sample ρ at the best λ *and* a
+leave-one-day-out cross-validated ρ, where each day is scored with a λ chosen
+without that day. The gap between them is the optimism, measured.
+
+**How big is it, actually?** Measured on simulated data with the ratings
+shuffled so there is no true relationship at all — 20 replicates, ~50 days each,
+a 21-point λ grid:
+
+| | mean | worst of 20 |
+|---|---:|---:|
+| in-sample ρ at the best λ | −0.032 | **+0.280** |
+| cross-validated ρ | −0.064 | +0.280 |
+| optimism | **+0.032** | +0.106 |
+
+So the optimism from tuning λ is modest: mean 0.03, worst case 0.11. The reason
+is structural — λ is a single *global* scalar applied to every day alike, so
+leaving one day out barely changes which value wins. One parameter over fifty
+days has very little room to chase noise.
+
+Two things still follow. First, 0.11 is not nothing when the threshold you are
+testing against is 0.30, and the cross-validated number costs nothing to
+compute, so compute it. Second, look at that worst-case in-sample column: on
+data with **no relationship whatsoever**, one replicate in twenty produced
+ρ = +0.28 — almost the "signal is real" threshold — from sampling variability
+alone. That is the larger hazard at these sample sizes, it is what §0 is about,
+and it is why the *interval* matters more than the point estimate.
+
+## 1d. The verdict should not depend on the constants you guessed
+
+Several Section 3 constants are judgement, not measurement: 28 days, 20%, 30
+beats, λ, *t* versus 1.96. `tone sensitivity` sweeps each one and reports
+whether the Phase 2.2 verdict moves. If it does, the conclusion is about the
+knob rather than about you, and the honest response is more days rather than a
+defence of the setting.
+
+One observation from the sweep on simulated data: ρ rises monotonically with the
+baseline length (0.804 at 14 days to 0.892 at 56). A longer baseline is a
+better-estimated baseline, so 28 days is a conservative choice — the limit is
+physiological drift, not statistics. Worth re-checking on your own data, since
+a body that changes over a season will punish a long baseline in a way the
+simulator's stationary rhythm does not.
+
+---
+
 ## 2. The artifact filter has to be two-sided
 
 "Discard any interval that differs from its neighbour by more than 20%" is

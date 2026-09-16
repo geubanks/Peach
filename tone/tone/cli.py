@@ -275,6 +275,63 @@ def cmd_validate(args) -> int:
     return {"real": 0, "sample-starved": 0, "rebuild": 2, "underpowered": 3}[daily_result.verdict]
 
 
+# ---------------------------------------------------------------------- sensitivity
+def cmd_sensitivity(args) -> int:
+    """Does the Phase 2.2 verdict survive the constants you picked by judgement?"""
+    from . import sensitivity as sens
+
+    cfg = _load_config(args.config)
+    windows = store.load(args.windows)
+    entries = diary_mod.read_diary(args.diary)
+    if not entries:
+        print(f"no diary entries parsed from {args.diary}", file=sys.stderr)
+        return 1
+
+    quantized = any(w.quantized for w in windows)
+    sweeps = [
+        ("baseline_days", "baseline_days", (14.0, 21.0, 28.0, 42.0, 56.0)),
+        ("artifact_threshold", "artifact_threshold", (0.10, 0.15, 0.20, 0.25, 0.30)),
+        ("min_intervals", "min_intervals", (15, 20, 30, 40, 50)),
+        ("interval", "interval", ("t", "normal")),
+    ]
+    if quantized:
+        sweeps.append(("quantization_correction", "quantization_correction", (False, True)))
+
+    _rule("lambda (Step 5's physiological prior)")
+    print(sens.report(sens.lambda_curve(windows, entries, cfg), knob="lambda"))
+
+    _rule("tuning lambda, honestly")
+    tuning = sens.tune_lambda(windows, entries, cfg)
+    print(tuning.report())
+    print()
+    print("Phase 5 says to re-fit lambda against the diary. Doing that and then quoting")
+    print("the resulting rho is circular -- you picked the parameter that maximises the")
+    print("number you are about to report. On simulated data with NO true relationship,")
+    print("a 21-point grid over ~50 days inflated rho by 0.03 on average and 0.11 at")
+    print("worst. Modest, because lambda is one global scalar and leaving a day out")
+    print("barely changes which value wins -- but not nothing when the threshold is 0.30,")
+    print("and the cross-validated number costs nothing to compute.")
+
+    unstable = []
+    for title, param, values in sweeps:
+        _rule(title)
+        points = sens.sweep(windows, entries, cfg, param=param, values=values)
+        print(sens.report(points, knob=param))
+        if len({p.verdict for p in points}) > 1:
+            unstable.append(title)
+
+    _rule("verdict")
+    if unstable:
+        print("The Phase 2.2 verdict DEPENDS on: " + ", ".join(unstable))
+        print("A conclusion that moves with a constant you chose by judgement is not yet a")
+        print("conclusion. More days is the usual fix; see `tone power`.")
+        return 2
+    print("The verdict held across every knob swept. That is worth a sentence in")
+    print("whatever you eventually write about this: the result is not an artifact of")
+    print("the 28 days, the 20%, or the 30 beats.")
+    return 0
+
+
 # ------------------------------------------------------------------------------ ecg
 def cmd_ecg(args) -> int:
     """Turn HKElectrocardiogram CSVs into scoreable windows.
@@ -619,6 +676,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--spot-window", type=float, default=30.0)
     sp.add_argument("--seed", type=int, default=20260916)
     sp.set_defaults(func=cmd_validate)
+
+    sp = sub.add_parser("sensitivity",
+                        help="does the verdict survive the constants you guessed?")
+    sp.add_argument("windows")
+    sp.add_argument("--diary", required=True)
+    sp.add_argument("--config")
+    sp.set_defaults(func=cmd_sensitivity)
 
     sp = sub.add_parser("ecg", help="HKElectrocardiogram CSVs -> scoreable windows")
     sp.add_argument("path", help="an unzipped export directory, or one ecg_*.csv")
