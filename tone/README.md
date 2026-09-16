@@ -138,8 +138,10 @@ within ~0.05 at n = 14. Both checks are in `tests/test_power.py`.
 
 ## Five things the implementation settled that the plan left open
 
-Each of these changed a number, so each is documented where it lives rather than
-only here. [`docs/FINDINGS.md`](docs/FINDINGS.md) has the full argument.
+Each changed a number, so each is documented where it lives rather than only
+here. [`docs/FINDINGS.md`](docs/FINDINGS.md) has the full argument, plus the
+ECG channel, the λ-tuning circularity, and the eight spec ambiguities the C port
+turned up.
 
 1. **The export's beat data is quantised to whole bpm**, which inflates RMSSD by
    about +2% at 35 ms and 60 bpm, +10% at 15 ms and 60 bpm, and +16% at 15 ms

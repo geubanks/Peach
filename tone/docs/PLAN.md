@@ -2,10 +2,13 @@
 
 *Proposal and build plan, revised 16 September 2026. Personal use, Claude Code writes the Swift, you own the science.*
 
-> Committed verbatim as the project's source of truth. Where implementing it
-> forced a decision the plan left open — five of them, each of which changed a
-> number — the decision and its argument are in
-> [`FINDINGS.md`](FINDINGS.md), not edited into the text below.
+> Committed verbatim as the project's source of truth. The text below is
+> unedited, including in the two places implementation showed it to be wrong:
+> Phase 1.3's 14-day milestone is not enough to run Phase 2.2 on (§0 of
+> [`FINDINGS.md`](FINDINGS.md)), and Phase 5's instruction to tune λ against the
+> diary is circular unless cross-validated (§1c). Every decision the plan left
+> open, and every number that changed, is argued in `FINDINGS.md` rather than
+> patched into the proposal.
 
 The plan you already have is directionally right: baseline-relative scoring, time-domain metrics first, verify against your own wrist. This revision changes four things, and I'll argue each one from evidence: (1) the landscape shifted last week and you now have a real decision about hardware; (2) the LF/HF "stretch goal" should be cut entirely, not deferred; (3) the two-channel score should be weighted by measurement noise, not by a physiology heuristic; and (4) the build order should be inverted so the algorithm is proven in Python on data you already have before a single line of Swift exists.
 

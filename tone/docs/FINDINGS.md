@@ -1,8 +1,21 @@
 # What implementing the plan turned up
 
-One finding that changes the schedule, five decisions that changed a number, and
-a caveat about the export. Each is also documented where it lives in the code;
-this file is the argument, not the reference.
+Each of these is also documented where it lives in the code; this file is the
+argument, not the reference. Section numbers are stable — `port/mutations.py`
+cites them by number, so they are not renumbered when something is inserted.
+
+| § | finding | what it changed |
+|---|---|---|
+| **0** | Phase 2.2 at 14 days would say "rebuild" on a real signal | a fourth verdict, and the schedule |
+| 1 | the export's beat data is quantised to whole bpm | a state-dependent bias, and an opt-in correction |
+| 1b | the ECG channel is worth building, and has a 62 bpm trapdoor | a new capability the plan listed but never used |
+| 1c | tuning λ against the diary is circular | cross-validated λ, optimism measured |
+| 1d | the verdict should not depend on constants you guessed | a sensitivity sweep |
+| 2 | the 20% artifact rule has to be two-sided | the filter no longer cascades |
+| 3 | RMSSD must not bridge a dropped interval | a correct answer instead of an inflated one |
+| 4 | `HR = 60000/mean(RR)`, not the mean of rates | a guaranteed parity failure, avoided |
+| 5 | the daily interval uses Student's *t*, not 1.96 | intervals 40% wider at n_d ≈ 5 |
+| — | [eight places the spec was ambiguous](#eight-places-the-spec-did-not-determine-an-answer) | all now written into `watch/CLAUDE.md` |
 
 ---
 
@@ -364,3 +377,40 @@ predicts. But it means the score measures *deviation from your usual day*, not
 total stress, and a day that is stressful on schedule will read closer to
 neutral than it felt. Worth knowing before you interpret a low score on a
 predictably bad Tuesday.
+
+
+---
+
+## Eight places the spec did not determine an answer
+
+Found by writing `port/engine.c` from `watch/CLAUDE.md` alone, without reading
+the Python — the experiment Phase 3.1's "done when" actually asks for. Each is
+marked `SPEC GAP` in `engine.c` and each is now written into the spec.
+
+| # | the question | the answer, now stated |
+|---|---|---|
+| 1 | is "the mean interval" over all intervals or only kept ones? | kept only |
+| 2 | what counts as a "distinct clock hour"? | `floor(hour) mod 24` |
+| 3 | which median convention for an even-sized set? | mean of the two central values |
+| 4 | does the fallback "sample SD" divide by *n* or *n−1*? | *n−1* |
+| 5 | what should the engine do while the weights are TODO? | equal weights, visibly a placeholder |
+| 6 | are the trailing window's endpoints open or closed? | `epoch ≥ t−28d`, strictly earlier by position |
+| 7 | what is "a day"? | the local calendar date of the window's start |
+| 8 | how exactly is the pooled within-day SD pooled? | classical, df = Σ(n_d − 1) |
+
+Seven of the eight change the numbers enough to fail parity. None is exotic;
+every one is a coin-flip a Swift author would also have had to make.
+
+Then the gate itself was tested — `port/mutations.py` breaks the engine twelve
+ways and checks the fixtures notice. The ordinary fixture caught only **9 of
+12**: the flat-baseline guard, the MAD-is-zero fallback and the exact 28-day
+boundary all survived, because a body producing five windows a day never reaches
+those branches. `watch/fixtures.edge.json` exists to close that, and catches
+**12 of 12**.
+
+The mutation suite also found a real bug in `port/runner.c`: the UTC-offset scan
+started one character too late, so whole-second timestamps parsed as naive and
+every epoch came out shifted by a constant — invisible to the baseline window,
+which uses only differences, and visible *only* in the day grouping. It surfaced
+as a mutation caught by one fixture and surviving the other. Nothing else in the
+harness would have found it.
