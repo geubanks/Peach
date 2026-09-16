@@ -176,24 +176,36 @@ class DailyScore:
 MIN_SIGMA = 1e-9
 
 
-def robust_sigma(values, mad_scale: float = DEFAULT.mad_scale, floor: float = MIN_SIGMA) -> float:
-    """1.4826 * median absolute deviation, with two documented fallbacks.
+def robust_sigma_detail(
+    values, mad_scale: float = DEFAULT.mad_scale, floor: float = MIN_SIGMA
+) -> tuple[float, bool]:
+    """1.4826 * MAD, and whether the sample-SD fallback was needed.
 
     MAD is exactly zero whenever more than half the residuals are identical,
-    which real data can produce after heavy filtering; the sample SD covers
-    that case. Below `floor` the channel has no usable spread at all and NaN is
-    returned, so the window goes unscored instead of being reported as a
+    which real data can produce after heavy filtering; the sample SD (ddof=1)
+    covers that case. Below `floor` the channel has no usable spread at all and
+    NaN is returned, so the window goes unscored instead of being reported as a
     thousand-sigma event.
+
+    The boolean is reported because the fallback is a branch a port can get
+    wrong invisibly -- `tone.edge_cases` builds a fixture that reaches it, and
+    the flag is how the test knows it got there.
     """
     v = np.asarray(values, dtype=float)
     v = v[np.isfinite(v)]
     if v.size < 2:
-        return float("nan")
+        return float("nan"), False
     mad = float(np.median(np.abs(v - float(np.median(v)))))
     sigma = mad_scale * mad
-    if sigma <= floor:
+    fallback = sigma <= floor
+    if fallback:
         sigma = float(np.std(v, ddof=1))
-    return sigma if sigma > floor else float("nan")
+    return (sigma if sigma > floor else float("nan")), fallback
+
+
+def robust_sigma(values, mad_scale: float = DEFAULT.mad_scale, floor: float = MIN_SIGMA) -> float:
+    """1.4826 * median absolute deviation, with two documented fallbacks."""
+    return robust_sigma_detail(values, mad_scale, floor)[0]
 
 
 def combine(z_x: float, z_h: float, cfg: ScoreConfig = DEFAULT) -> float:
@@ -216,8 +228,8 @@ def _score_channel(
     index: int,
     lo: int,
     cfg: ScoreConfig,
-) -> tuple[float, float, float, cosinor.CosinorFit]:
-    """Residual, sigma, z and baseline fit for one channel at one index."""
+) -> tuple[float, float, float, cosinor.CosinorFit, bool]:
+    """Residual, sigma, z, baseline fit, and whether the SD fallback fired."""
     base_hours = hours[lo:index]
     base_values = values[lo:index]
     n = base_values.size
@@ -229,9 +241,9 @@ def _score_channel(
 
     resid_here = float(values[index] - float(fit.predict(np.array([hours[index]]))[0]))
     base_resid = base_values - fit.predict(base_hours)
-    sigma = robust_sigma(base_resid, cfg.mad_scale)
+    sigma, fallback = robust_sigma_detail(base_resid, cfg.mad_scale)
     z = resid_here / sigma if (math.isfinite(sigma) and sigma > 0) else float("nan")
-    return resid_here, sigma, z, fit
+    return resid_here, sigma, z, fit, fallback
 
 
 def score_windows(windows, cfg: ScoreConfig = DEFAULT) -> list[WindowScore]:
@@ -278,14 +290,16 @@ def score_windows(windows, cfg: ScoreConfig = DEFAULT) -> list[WindowScore]:
             ws.flags.append("warming_up")
             continue
 
-        rx, sx, zx, fit_x = _score_channel(hours, xs, k, lo, cfg)
-        rh, sh, zh, fit_h = _score_channel(hours, hs, k, lo, cfg)
+        rx, sx, zx, fit_x, fb_x = _score_channel(hours, xs, k, lo, cfg)
+        rh, sh, zh, fit_h, fb_h = _score_channel(hours, hs, k, lo, cfg)
 
         ws.resid_x, ws.sigma_x, ws.z_x = rx, sx, zx
         ws.resid_h, ws.sigma_h, ws.z_h = rh, sh, zh
         ws.baseline_r2_x, ws.baseline_r2_h = fit_x.r2, fit_h.r2
         if fit_x.flat or fit_h.flat:
             ws.flags.append("flat_baseline")
+        if fb_x or fb_h:
+            ws.flags.append("sd_fallback")
         if not (math.isfinite(sx) and math.isfinite(sh)):
             ws.flags.append("no_spread")
         if not cfg.weights_measured:

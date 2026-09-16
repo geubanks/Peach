@@ -11,3 +11,6 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
+
+# C port build artifact
+port/tone_parity

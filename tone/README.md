@@ -14,6 +14,12 @@ before the falsification test would encode weights you guessed. What exists
 instead is everything Phase 2.2 needs, plus the fixture generator that will make
 the Swift port unable to drift from the science.
 
+What *does* exist is [`port/`](port/README.md): the same engine in C99, written
+from `watch/CLAUDE.md` alone, passing both fixtures at 1e-6 and mutation-tested
+to prove the gate has teeth. It is the Phase 4.2 rehearsal — it found eight
+places where the spec was ambiguous, all now closed — and it is a near-mechanical
+transcription source for the Swift when the gate opens.
+
 ---
 
 ## Install
@@ -22,7 +28,7 @@ the Swift port unable to drift from the science.
 cd tone
 python3 -m pip install -e .            # numpy only
 python3 -m pip install -e '.[plots,dev]'   # add matplotlib and pytest
-python3 -m pytest                      # 86 tests, ~6 s
+python3 -m pytest                      # 93 tests, ~18 s (skips port/ without a C compiler)
 ```
 
 Everything also runs without installing: `python3 -m tone <command>`.
@@ -87,7 +93,11 @@ python3 -m tone fixtures data/windows.jsonl \
 | `simulate.py` | a synthetic body with known parameters |
 | `fixtures.py` | the parity contract for the Swift port |
 | `store.py` | one JSONL format every command reads |
+| `edge_cases.py` | deterministic windows that reach the degenerate branches |
 | `plots.py` | optional figures for Phase 1.1 / 1.2 |
+
+And outside the package: [`port/`](port/README.md), a C99 implementation of the
+same engine with a fixture runner and a mutation suite.
 
 ## One finding that changes the schedule
 
@@ -144,6 +154,31 @@ Two smaller choices, both in `score.py`: the trailing baseline excludes the
 window being scored (which is also what the deployed app necessarily does), and
 a day with one usable window borrows the pooled within-day SD and is flagged
 rather than shown without an interval.
+
+## Is the spec good enough to build from?
+
+Phase 3.1's "done when" is that a second reader can build the app from the spec
+alone. That got tested rather than assumed: `port/engine.c` is the engine
+written from `watch/CLAUDE.md` without reading the Python. It reached parity —
+and found **eight places where the spec did not determine an answer** (is "the
+mean interval" over kept intervals only? what is "a day"? which median
+convention? open or closed endpoints on the 28-day window?). Seven of the eight
+change the numbers enough to fail parity. All are now written into the spec.
+
+Then the gate itself got tested. `port/mutations.py` breaks the engine twelve
+ways — once per documented decision — and checks that the fixtures notice:
+
+| fixture | mutations caught |
+|---|---|
+| `fixtures.example.json` (ordinary data) | 9 / 12 |
+| `fixtures.edge.json` (degenerate branches) | **12 / 12** |
+
+The three that survived ordinary data were the flat-baseline guard, the
+MAD-is-zero fallback and the exact 28-day boundary — branches a real body never
+reaches. A port guessing wrong on those would have passed and shipped, which is
+why `watch/fixtures.edge.json` now exists and why the engine must pass both
+files. The mutation suite also found a genuine bug in the C runner's timestamp
+parsing that nothing else in the harness could have caught.
 
 ## What this cannot tell you yet
 

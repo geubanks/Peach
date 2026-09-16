@@ -316,8 +316,38 @@ def cmd_power(args) -> int:
 # ------------------------------------------------------------------------ fixtures
 def cmd_fixtures(args) -> int:
     cfg = _load_config(args.config)
-    windows = store.load(args.windows)
-    doc = fixtures_mod.build(windows, cfg, limit=args.limit)
+    if args.edge:
+        from . import edge_cases
+        windows = edge_cases.all_windows()
+        limit = None  # check every scored window; the file is small and each
+                      # scenario matters
+    elif args.windows:
+        windows = store.load(args.windows)
+        limit = args.limit
+    else:
+        print("give a windows file, or --edge for the degenerate-branch fixture",
+              file=sys.stderr)
+        return 1
+    doc = fixtures_mod.build(windows, cfg, limit=limit)
+    if args.edge:
+        from . import edge_cases
+        from .score import daily_scores as _daily, score_windows as _score
+        scores = _score(windows, cfg)
+        counts = edge_cases.coverage(scores, _daily(scores, cfg))
+        missing = [b for b in edge_cases.REQUIRED_BRANCHES if not counts[b]]
+        print(edge_cases.report(scores, _daily(scores, cfg)))
+        if missing:
+            print(f"ERROR: these branches were not reached: {', '.join(missing)}",
+                  file=sys.stderr)
+            return 1
+        doc["notes"] = (
+            "DEGENERATE-BRANCH FIXTURE. Deterministic synthetic windows built by "
+            "tone.edge_cases to reach the paths ordinary data never takes: the "
+            "flat-baseline guard, the MAD-is-zero sigma fallback, the exact 28-day "
+            "baseline boundary, a single-window day borrowing the pooled SD, and "
+            "windows that must be dropped. A port must pass this file as well as "
+            "the one built from real data. " + doc["notes"]
+        )
     checked = sum(1 for w in doc["windows"] if w["checked"])
     if checked == 0:
         print(
@@ -500,10 +530,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_power)
 
     sp = sub.add_parser("fixtures", help="write parity fixtures for the Swift port")
-    sp.add_argument("windows")
+    sp.add_argument("windows", nargs="?")
     sp.add_argument("--config")
     sp.add_argument("--out", default="watch/fixtures.json")
     sp.add_argument("--limit", type=int, default=50, help="checked windows (default 50)")
+    sp.add_argument("--edge", action="store_true",
+                    help="emit the degenerate-branch fixture instead of using a data file")
     sp.set_defaults(func=cmd_fixtures)
 
     sp = sub.add_parser("verify", help="re-run a fixture file and report mismatches")

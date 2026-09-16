@@ -91,7 +91,10 @@ $$x_i = \ln \mathrm{RMSSD}_i, \qquad h_i = \ln \mathrm{HR}_i, \qquad \mathrm{HR}
 
 `HR` is 60000 divided by the **mean interval**, not the mean of the
 instantaneous rates. The two differ by Jensen's inequality and mixing them up
-fails parity.
+fails parity. The mean is over the **kept** intervals only — putting the ectopic
+beat and its compensatory pause back into the heart rate would undo Step 1. They
+nearly cancel, so getting this wrong costs about 0.1%: too small to see, large
+enough to fail every fixture.
 
 **Step 3 — circadian baseline.** Over the trailing **28 days, excluding the
 window being scored**, fit by ordinary least squares:
@@ -106,10 +109,27 @@ dependency and matches the Python to the last bit. If the pivot falls below
 clock hours among them, fall back to a flat mean (MESOR only) and flag the
 window `flat_baseline`.
 
+The baseline of window *i* is every window *j* with
+
+```
+epoch(j) >= epoch(i) - baseline_days * 86400     AND     j < i by position
+```
+
+— half-open at the old end, strictly earlier at the new end, and positional
+rather than by timestamp so two windows sharing a timestamp cannot each sit in
+the other's baseline. A **distinct clock hour** means `floor(hour) mod 24`, the
+integer bucket; counting distinct fractional hours would make the guard useless,
+since no two samples share a second. Below `min_scoring_windows` (30) baseline
+windows, emit **no score at all** and flag `warming_up` — that is a different
+rule from the flat-baseline fallback, which still produces a score.
+
 **Step 4 — robust z.** Residual $r_i = y_i - \hat{y}(t_i)$; sigma is
 **1.4826 × MAD** of the baseline windows' own residuals under the same fit. If
-MAD is zero, fall back to the sample SD; if that is below 1e-9, emit **no
-score** for the window rather than a division blow-up.
+MAD is zero, fall back to the **sample** SD (divisor *n − 1*) and flag
+`sd_fallback`; if that is below 1e-9, emit **no score** for the window rather
+than a division blow-up. `median` of an even-sized set is the **mean of the two
+central order statistics** — taking the lower one shifts sigma by a fraction of
+a percent, which is invisible by eye and fatal at 1e-6.
 
 $$Z_{x,i} = \frac{r_{x,i}}{\sigma_{r_x}}, \qquad Z_{h,i} = \frac{r_{h,i}}{\sigma_{r_h}}$$
 
@@ -128,15 +148,32 @@ heart rate both push *S* up.
 
 These are measured, not chosen. Do not substitute a plausible-looking number to
 unblock the build; an unmeasured weight is the thing this whole ordering exists
-to prevent.
+to prevent. When they are genuinely absent — running against the example fixture
+before Phase 2.1 — use **equal weights**, `w_x = λ` and `w_h = 1`. Equal weights
+are visibly a placeholder; 0.7/0.3 would look like a decision.
 
 **Step 6 — daily aggregate.** $\bar{S}_d$ is the mean of the day's $S_i$; the
 95% interval is $\bar{S}_d \pm t_{0.975,\,n_d-1}\cdot\sigma_S/\sqrt{n_d}$, with
 the *t* table in `score.T_CRIT_975` (df 1–30, then 1.960). Not 1.96 — at
-$n_d\approx5$ that understates the interval by 40%. A day with one usable window
-borrows the pooled within-day SD from other days and is marked as having done
-so. A single window's $S_i$ is displayed **only** when it came from an
-on-demand session the user deliberately took.
+$n_d\approx5$ that understates the interval by 40%. A single window's $S_i$ is
+displayed **only** when it came from an on-demand session the user deliberately
+took.
+
+**A day** is the **local calendar date of the window's start** — consistent with
+Step 3's local clock hour, so a 1 a.m. window belongs to the night you went to
+bed on, in your timezone, not to whatever date it was in UTC. Timestamps must
+therefore carry an explicit UTC offset; treat a naive timestamp as an error
+rather than assuming one. (A missing offset shifts every epoch by a constant,
+which is invisible to the baseline window — it uses only differences — and shows
+up solely in the day grouping. That failure mode cost a debugging session here.)
+
+**A day with one usable window** borrows the pooled within-day SD and is marked
+`sd_pooled`. The pooling is the classical estimate over days with $n_d \geq 2$:
+
+$$s_{\text{pooled}} = \sqrt{\frac{\sum_d \mathrm{SS}_d}{\sum_d (n_d - 1)}}, \qquad
+\mathrm{df} = \sum_d (n_d - 1)$$
+
+and that df is what indexes the *t* table for such a day.
 
 ## 4. Fixtures — the gate on everything else
 
@@ -146,10 +183,25 @@ block, a series of windows as RR arrays in milliseconds, and the expected
 `sigma_h`, `z_x`, `z_h`, `s` for the last 50 scored windows, plus the expected
 daily aggregates.
 
-`fixtures.example.json` in this directory is the **format** — generated from the
-simulator with illustrative weights, so the Swift side can be built and its
-decoder tested before the real file exists. It is not anyone's data and must not
-be used to claim parity.
+Two fixture files ship here, and the engine must pass **both**:
+
+- `fixtures.example.json` — the **format**, generated from the simulator with
+  illustrative weights, so the Swift side can be built and its decoder tested
+  before the real file exists. Not anyone's data; never cite it as parity.
+- `fixtures.edge.json` — the **degenerate branches**: the flat-baseline guard,
+  the MAD-is-zero fallback, the exact 28-day boundary, a single-window day
+  borrowing the pooled SD, and windows that must be dropped. Deterministic, no
+  RNG. Ordinary data never reaches these paths, so without this file a port can
+  guess wrong on them and still pass. Regenerate with
+  `python3 -m tone fixtures --edge --out watch/fixtures.edge.json`.
+
+A reference implementation already passes both: `../port/` is a C99 engine
+written *from this document alone*, with `make check` running the parity gate.
+Mutation-testing it (`python3 ../port/mutations.py`) shows the two files
+together catch 12 of 12 deliberate errors at 1e-6 — and that the ordinary
+fixture alone catches only 9, which is why the edge file exists. Transcribe the
+Swift from `../port/engine.c`: it is scalar loops, no allocation inside the
+maths, and no linear algebra.
 
 **`ScoreEngine` must reproduce every checked field to within 1e-6 (relative,
 against `max(1, |expected|)`) in a unit test before any UI code is written.**
